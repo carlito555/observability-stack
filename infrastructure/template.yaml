@@ -7,9 +7,6 @@ Parameters:
   GrafanaWorkspaceName:
     Type: String
     Default: "central-observability"
-  SSOOrganizationId:
-    Type: String
-    Description: AWS Organizations ID for IAM Identity Center
   AlertEmail:
     Type: String
     Description: Email address for SNS alert subscriptions

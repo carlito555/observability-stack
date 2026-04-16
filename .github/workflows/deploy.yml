@@ -84,7 +84,6 @@ jobs:
             --stack-name ${{ env.STACK_NAME }} \
             --parameter-overrides \
                 GrafanaWorkspaceName=central-observability \
-                SSOOrganizationId=${{ secrets.AWS_SSO_ORG_ID }} \
                 AlertEmail=${{ secrets.ALERT_EMAIL }} \
                 EnvironmentName=production \
             --capabilities CAPABILITY_NAMED_IAM \
