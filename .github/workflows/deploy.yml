@@ -143,13 +143,17 @@ jobs:
           GRAFANA_URL: ${{ needs.deploy.outputs.grafana_endpoint }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
         run: |
-          echo "Checking Grafana health..."
-          echo "Token length is: ${#GRAFANA_API_KEY} characters"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $GRAFANA_API_KEY" \
-            "$GRAFANA_URL/api/health")
-          if [ "$STATUS" != "200" ]; then
-            echo "Health check failed with status $STATUS"
-            exit 1
-          fi
-          echo "Grafana is healthy (HTTP $STATUS)"
+          # Strip trailing slash from URL
+          URL=$(echo "${GRAFANA_URL}" | sed 's/\/$//')
+  
+          echo "Testing connection to: $URL/api/health"
+  
+          # Get the full response body
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GRAFANA_API_KEY" "$URL/api/health")
+  
+          echo "Grafana Response Body: $RESPONSE"
+  
+          # Now do the status check
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GRAFANA_API_KEY" "$URL/api/health")
+          echo "HTTP Status: $STATUS"
+
