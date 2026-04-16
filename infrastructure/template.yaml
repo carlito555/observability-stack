@@ -418,7 +418,6 @@ Resources:
 
   GrafanaConfigCustomResource:
     Type: Custom::GrafanaConfig
-    DependsOn: GrafanaWorkspace
     Properties:
       ServiceToken: !GetAtt GrafanaConfigFunction.Arn
       WorkspaceId: !Ref GrafanaWorkspace
