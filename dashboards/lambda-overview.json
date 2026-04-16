@@ -1,0 +1,226 @@
+{
+  "title": "Lambda — Service Overview",
+  "uid": "lambda-service-overview",
+  "tags": ["lambda", "aws", "gitops"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Invocations (1h)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/Lambda",
+          "metricName": "Invocations",
+          "statistics": ["Sum"],
+          "period": "3600",
+          "matchExact": false
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10000 },
+              { "color": "red", "value": 100000 }
+            ]
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error Rate (1h)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/Lambda",
+          "metricName": "Errors",
+          "statistics": ["Sum"],
+          "period": "3600",
+          "matchExact": false
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "P99 Duration (ms)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/Lambda",
+          "metricName": "Duration",
+          "statistics": ["p99"],
+          "period": "300",
+          "matchExact": false
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "red", "value": 5000 }
+            ]
+          },
+          "unit": "ms"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Throttles (1h)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+      "targets": [
+        {
+          "refId": "A",
+          "namespace": "AWS/Lambda",
+          "metricName": "Throttles",
+          "statistics": ["Sum"],
+          "period": "3600",
+          "matchExact": false
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Invocations vs Errors",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+      "targets": [
+        {
+          "refId": "Invocations",
+          "namespace": "AWS/Lambda",
+          "metricName": "Invocations",
+          "statistics": ["Sum"],
+          "period": "300",
+          "matchExact": false
+        },
+        {
+          "refId": "Errors",
+          "namespace": "AWS/Lambda",
+          "metricName": "Errors",
+          "statistics": ["Sum"],
+          "period": "300",
+          "matchExact": false
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Errors" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "function_name",
+        "type": "query",
+        "label": "Function",
+        "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+        "refresh": 2,
+        "query": {
+          "queryType": "dimensionValues",
+          "namespace": "AWS/Lambda",
+          "metricName": "Invocations",
+          "dimensionKey": "FunctionName"
+        },
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Deployments",
+        "enable": true,
+        "datasource": { "type": "cloudwatch", "uid": "CloudWatch" },
+        "iconColor": "blue"
+      }
+    ]
+  }
+}

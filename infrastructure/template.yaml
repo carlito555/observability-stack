@@ -1,0 +1,486 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Centralized Observability Stack — AWS Managed Grafana, CloudWatch,
+  SNS Alerting, and Lambda Custom Resource for post-deploy configuration.
+
+Parameters:
+  GrafanaWorkspaceName:
+    Type: String
+    Default: "central-observability"
+  SSOOrganizationId:
+    Type: String
+    Description: AWS Organizations ID for IAM Identity Center
+  AlertEmail:
+    Type: String
+    Description: Email address for SNS alert subscriptions
+  EnvironmentName:
+    Type: String
+    Default: "production"
+    AllowedValues: [production, staging, development]
+
+# ---------------------------------------------------------------------------
+# IAM ROLES
+# ---------------------------------------------------------------------------
+Resources:
+
+  GrafanaWorkspaceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${GrafanaWorkspaceName}-workspace-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: grafana.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonGrafanaCloudWatchAccess
+      Policies:
+        - PolicyName: GrafanaSNSPublish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertsTopic
+
+  CustomResourceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${GrafanaWorkspaceName}-custom-resource-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: GrafanaAPIAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - grafana:UpdateWorkspace
+                  - grafana:DescribeWorkspace
+                  - grafana:CreateWorkspaceApiKey
+                  - grafana:DeleteWorkspaceApiKey
+                Resource: !Sub "arn:aws:grafana:${AWS::Region}:${AWS::AccountId}:/workspaces/*"
+
+# ---------------------------------------------------------------------------
+# SNS — ALERTS
+# ---------------------------------------------------------------------------
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${GrafanaWorkspaceName}-alerts"
+      DisplayName: "Grafana Observability Alerts"
+
+  AlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+# ---------------------------------------------------------------------------
+# AWS MANAGED GRAFANA WORKSPACE
+# ---------------------------------------------------------------------------
+
+  GrafanaWorkspace:
+    Type: AWS::Grafana::Workspace
+    Properties:
+      Name: !Ref GrafanaWorkspaceName
+      Description: !Sub "Centralized observability workspace for ${EnvironmentName}"
+      AccountAccessType: CURRENT_ACCOUNT
+      AuthenticationProviders:
+        - AWS_SSO
+      PermissionType: SERVICE_MANAGED
+      RoleArn: !GetAtt GrafanaWorkspaceRole.Arn
+      DataSources:
+        - CLOUDWATCH
+      NotificationDestinations:
+        - SNS
+      OrganizationalUnits: []
+
+# ---------------------------------------------------------------------------
+# CLOUDWATCH DASHBOARDS
+# ---------------------------------------------------------------------------
+
+  EC2ObservabilityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${EnvironmentName}-EC2-Overview"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "EC2 CPU Utilization",
+                "metrics": [
+                  ["AWS/EC2", "CPUUtilization", {"stat": "Average", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "EC2 Network In/Out",
+                "metrics": [
+                  ["AWS/EC2", "NetworkIn", {"stat": "Sum", "period": 300}],
+                  ["AWS/EC2", "NetworkOut", {"stat": "Sum", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+  LambdaObservabilityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${EnvironmentName}-Lambda-Overview"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "Lambda Invocations",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", {"stat": "Sum", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "Lambda Errors",
+                "metrics": [
+                  ["AWS/Lambda", "Errors", {"stat": "Sum", "period": 300, "color": "#d13212"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "Lambda Duration (P99)",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", {"stat": "p99", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+  RDSObservabilityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${EnvironmentName}-RDS-Overview"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS CPU Utilization",
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization", {"stat": "Average", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS Database Connections",
+                "metrics": [
+                  ["AWS/RDS", "DatabaseConnections", {"stat": "Average", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 0, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS Free Storage Space",
+                "metrics": [
+                  ["AWS/RDS", "FreeStorageSpace", {"stat": "Minimum", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+# ---------------------------------------------------------------------------
+# LAMBDA — CUSTOM RESOURCE (POST-DEPLOY GRAFANA CONFIGURATION)
+# ---------------------------------------------------------------------------
+
+  GrafanaConfigFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${GrafanaWorkspaceName}-config-handler"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt CustomResourceLambdaRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          WORKSPACE_ID: !Ref GrafanaWorkspace
+          SNS_TOPIC_ARN: !Ref AlertsTopic
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import urllib3
+          import os
+          import time
+          import cfnresponse
+
+          http = urllib3.PoolManager()
+
+          grafana_client = boto3.client("grafana")
+          WORKSPACE_ID = os.environ["WORKSPACE_ID"]
+          SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
+
+          PLUGINS_TO_INSTALL = [
+              "grafana-clock-panel",
+              "grafana-piechart-panel",
+              "grafana-worldmap-panel",
+              "natel-discrete-panel",
+          ]
+
+          def get_workspace_url():
+              resp = grafana_client.describe_workspace(workspaceId=WORKSPACE_ID)
+              return f"https://{resp['workspace']['endpoint']}"
+
+          def create_api_key(workspace_url):
+              """Create a temporary admin API key via the Grafana API."""
+              resp = grafana_client.create_workspace_api_key(
+                  keyName=f"cfn-custom-resource-{int(time.time())}",
+                  keyRole="ADMIN",
+                  secondsToLive=300,
+                  workspaceId=WORKSPACE_ID,
+              )
+              return resp["key"]
+
+          def delete_api_key(key_name):
+              try:
+                  grafana_client.delete_workspace_api_key(
+                      keyName=key_name,
+                      workspaceId=WORKSPACE_ID,
+                  )
+              except Exception:
+                  pass
+
+          def install_plugins(workspace_url, api_key):
+              """Install Grafana plugins via the plugin API."""
+              headers = {
+                  "Authorization": f"Bearer {api_key}",
+                  "Content-Type": "application/json",
+              }
+              results = []
+              for plugin_id in PLUGINS_TO_INSTALL:
+                  url = f"{workspace_url}/api/plugins/{plugin_id}/install"
+                  resp = http.request("POST", url, headers=headers)
+                  results.append({
+                      "plugin": plugin_id,
+                      "status": resp.status,
+                      "body": resp.data.decode("utf-8")[:200],
+                  })
+                  print(f"Plugin install {plugin_id}: {resp.status}")
+              return results
+
+          def configure_cloudwatch_datasource(workspace_url, api_key, region):
+              """Add CloudWatch as a data source in Grafana."""
+              headers = {
+                  "Authorization": f"Bearer {api_key}",
+                  "Content-Type": "application/json",
+              }
+              datasource_payload = {
+                  "name": "CloudWatch",
+                  "type": "cloudwatch",
+                  "access": "proxy",
+                  "jsonData": {
+                      "authType": "default",
+                      "defaultRegion": region,
+                  },
+                  "isDefault": True,
+              }
+              url = f"{workspace_url}/api/datasources"
+              resp = http.request(
+                  "POST",
+                  url,
+                  headers=headers,
+                  body=json.dumps(datasource_payload).encode("utf-8"),
+              )
+              print(f"Datasource creation: {resp.status} — {resp.data.decode('utf-8')[:300]}")
+              return resp.status
+
+          def configure_sns_notification_channel(workspace_url, api_key, sns_topic_arn):
+              """Configure SNS as a Grafana alert notification channel."""
+              headers = {
+                  "Authorization": f"Bearer {api_key}",
+                  "Content-Type": "application/json",
+              }
+              payload = {
+                  "name": "SNS-Alerts",
+                  "type": "sns",
+                  "settings": {
+                      "topic": sns_topic_arn,
+                      "authProvider": "default",
+                      "region": os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+                  },
+                  "isDefault": True,
+              }
+              url = f"{workspace_url}/api/alert-notifications"
+              resp = http.request(
+                  "POST",
+                  url,
+                  headers=headers,
+                  body=json.dumps(payload).encode("utf-8"),
+              )
+              print(f"Notification channel: {resp.status}")
+              return resp.status
+
+          def handler(event, context):
+              print(json.dumps(event))
+              request_type = event.get("RequestType", "Create")
+              key_name = None
+              try:
+                  if request_type == "Delete":
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  workspace_url = get_workspace_url()
+                  region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
+                  key_name = f"cfn-custom-resource-{int(time.time())}"
+                  resp = grafana_client.create_workspace_api_key(
+                      keyName=key_name,
+                      keyRole="ADMIN",
+                      secondsToLive=300,
+                      workspaceId=WORKSPACE_ID,
+                  )
+                  api_key = resp["key"]
+
+                  plugin_results = install_plugins(workspace_url, api_key)
+                  ds_status = configure_cloudwatch_datasource(workspace_url, api_key, region)
+                  notif_status = configure_sns_notification_channel(
+                      workspace_url, api_key, SNS_TOPIC_ARN
+                  )
+
+                  cfnresponse.send(
+                      event,
+                      context,
+                      cfnresponse.SUCCESS,
+                      {
+                          "WorkspaceUrl": workspace_url,
+                          "PluginResults": str(plugin_results),
+                          "DatasourceStatus": str(ds_status),
+                          "NotificationStatus": str(notif_status),
+                      },
+                  )
+              except Exception as exc:
+                  print(f"ERROR: {exc}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(exc)})
+              finally:
+                  if key_name:
+                      delete_api_key(key_name)
+
+  GrafanaConfigCustomResource:
+    Type: Custom::GrafanaConfig
+    DependsOn: GrafanaWorkspace
+    Properties:
+      ServiceToken: !GetAtt GrafanaConfigFunction.Arn
+      WorkspaceId: !Ref GrafanaWorkspace
+      Timestamp: !Sub "${AWS::StackName}-v1"
+
+# ---------------------------------------------------------------------------
+# CLOUDWATCH ALARMS → SNS
+# ---------------------------------------------------------------------------
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${EnvironmentName}-lambda-high-error-rate"
+      AlarmDescription: "Lambda error rate exceeds threshold"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertsTopic
+      OKActions:
+        - !Ref AlertsTopic
+
+  EC2CPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${EnvironmentName}-ec2-high-cpu"
+      AlarmDescription: "EC2 CPU utilization is critically high"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlertsTopic
+
+# ---------------------------------------------------------------------------
+# OUTPUTS
+# ---------------------------------------------------------------------------
+
+Outputs:
+  GrafanaWorkspaceId:
+    Description: AMG Workspace ID
+    Value: !Ref GrafanaWorkspace
+    Export:
+      Name: !Sub "${AWS::StackName}-WorkspaceId"
+
+  GrafanaWorkspaceEndpoint:
+    Description: AMG Workspace endpoint URL
+    Value: !Sub "https://${GrafanaWorkspace.Endpoint}"
+    Export:
+      Name: !Sub "${AWS::StackName}-WorkspaceEndpoint"
+
+  AlertsTopicArn:
+    Description: SNS Topic ARN for alerts
+    Value: !Ref AlertsTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-AlertsTopicArn"

@@ -1,0 +1,154 @@
+name: Deploy Observability Stack
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: central-observability-stack
+  TEMPLATE_PATH: infrastructure/template.yaml
+  DASHBOARDS_DIR: dashboards
+
+permissions:
+  id-token: write   # Required for OIDC authentication
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # JOB 1 — LINT & VALIDATE
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint CloudFormation template
+        run: cfn-lint ${{ env.TEMPLATE_PATH }} --include-checks W
+
+      - name: Validate CloudFormation template (AWS)
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://${{ env.TEMPLATE_PATH }}
+
+      - name: Check dashboard JSON files are valid
+        run: |
+          for f in ${{ env.DASHBOARDS_DIR }}/*.json; do
+            echo "Validating $f ..."
+            python3 -c "import json, sys; json.load(open('$f'))" \
+              && echo "  OK" \
+              || { echo "  INVALID JSON: $f"; exit 1; }
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 — DEPLOY / UPDATE STACK
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy Stack
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      grafana_endpoint: ${{ steps.stack_outputs.outputs.grafana_endpoint }}
+      grafana_workspace_id: ${{ steps.stack_outputs.outputs.grafana_workspace_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation stack
+        id: deploy
+        run: |
+          aws cloudformation deploy \
+            --template-file ${{ env.TEMPLATE_PATH }} \
+            --stack-name ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+                GrafanaWorkspaceName=central-observability \
+                SSOOrganizationId=${{ secrets.AWS_SSO_ORG_ID }} \
+                AlertEmail=${{ secrets.ALERT_EMAIL }} \
+                EnvironmentName=production \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --tags \
+                Environment=production \
+                ManagedBy=github-actions \
+                Repo=${{ github.repository }}
+
+      - name: Retrieve stack outputs
+        id: stack_outputs
+        run: |
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='GrafanaWorkspaceEndpoint'].OutputValue" \
+            --output text)
+
+          WORKSPACE_ID=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query "Stacks[0].Outputs[?OutputKey=='GrafanaWorkspaceId'].OutputValue" \
+            --output text)
+
+          echo "grafana_endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+          echo "grafana_workspace_id=$WORKSPACE_ID" >> $GITHUB_OUTPUT
+          echo "Grafana endpoint: $ENDPOINT"
+
+  # ---------------------------------------------------------------------------
+  # JOB 3 — PUSH DASHBOARDS TO GRAFANA (GitOps)
+  # ---------------------------------------------------------------------------
+  push-dashboards:
+    name: Push Dashboards to Grafana
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Upload dashboards via Grafana HTTP API
+        env:
+          GRAFANA_URL: ${{ needs.deploy.outputs.grafana_endpoint }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          DASHBOARDS_DIR: ${{ env.DASHBOARDS_DIR }}
+        run: python3 scripts/push_dashboards.py
+
+      - name: Verify dashboards are live
+        env:
+          GRAFANA_URL: ${{ needs.deploy.outputs.grafana_endpoint }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+        run: |
+          echo "Checking Grafana health..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GRAFANA_API_KEY" \
+            "$GRAFANA_URL/api/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed with status $STATUS"
+            exit 1
+          fi
+          echo "Grafana is healthy (HTTP $STATUS)"
