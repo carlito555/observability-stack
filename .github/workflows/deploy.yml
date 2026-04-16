@@ -144,6 +144,7 @@ jobs:
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
         run: |
           echo "Checking Grafana health..."
+          echo "Token length is: ${#GRAFANA_API_KEY} characters"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GRAFANA_API_KEY" \
             "$GRAFANA_URL/api/health")
