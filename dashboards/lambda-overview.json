@@ -4,7 +4,7 @@
   "tags": ["lambda", "aws", "gitops"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "refresh": "1m",
+  "refresh": "30s",
   "time": {
     "from": "now-3h",
     "to": "now"
